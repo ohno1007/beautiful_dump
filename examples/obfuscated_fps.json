@@ -1,0 +1,146 @@
+{
+  "Types": [
+    {
+      "Name": "MonoBehaviour",
+      "Namespace": "UnityEngine",
+      "BaseType": "UnityEngine.Behaviour"
+    },
+    {
+      "Name": "Behaviour",
+      "Namespace": "UnityEngine",
+      "BaseType": "UnityEngine.Component"
+    },
+    {
+      "Name": "Component",
+      "Namespace": "UnityEngine",
+      "BaseType": "UnityEngine.Object"
+    },
+    {
+      "Name": "Object",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "CharacterController",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "Camera",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "Transform",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "AudioSource",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "AudioClip",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "Rigidbody",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "Collider",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "GameObject",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "ParticleSystem",
+      "Namespace": "UnityEngine"
+    },
+    {
+      "Name": "Vector3",
+      "Namespace": "UnityEngine",
+      "IsValueType": true
+    },
+    {
+      "Name": "NavMeshAgent",
+      "Namespace": "UnityEngine.AI"
+    },
+
+    {
+      "Name": "Aa",
+      "Namespace": "",
+      "BaseType": "UnityEngine.MonoBehaviour",
+      "Fields": [
+        {"Name": "Il", "Type": "UnityEngine.CharacterController", "IsPublic": false},
+        {"Name": "I1", "Type": "UnityEngine.Camera", "IsPublic": false},
+        {"Name": "lI", "Type": "UnityEngine.Transform", "IsPublic": false},
+        {"Name": "Il1", "Type": "System.Single", "IsPublic": false}
+      ],
+      "Methods": [
+        {"Name": "Aa", "ReturnType": "System.Void", "IsConstructor": true},
+        {"Name": "ll", "ReturnType": "System.Void", "Parameters": []},
+        {"Name": "lI1", "ReturnType": "System.Void", "Parameters": [{"Name": "x", "Type": "UnityEngine.Collider"}]}
+      ]
+    },
+
+    {
+      "Name": "Bb",
+      "Namespace": "",
+      "BaseType": "UnityEngine.MonoBehaviour",
+      "Fields": [
+        {"Name": "Aa", "Type": "UnityEngine.AudioSource", "IsPublic": false},
+        {"Name": "Bb", "Type": "UnityEngine.AudioClip", "IsPublic": false},
+        {"Name": "Cc", "Type": "UnityEngine.Transform", "IsPublic": false},
+        {"Name": "Dd", "Type": "UnityEngine.ParticleSystem", "IsPublic": false},
+        {"Name": "Ee", "Type": "System.Single", "IsPublic": false},
+        {"Name": "Ff", "Type": "System.Int32", "IsPublic": false}
+      ],
+      "Methods": [
+        {"Name": "Bb", "ReturnType": "System.Void", "IsConstructor": true},
+        {"Name": "I", "ReturnType": "System.Void", "Parameters": []},
+        {"Name": "II", "ReturnType": "System.Void", "Parameters": []}
+      ]
+    },
+
+    {
+      "Name": "Cc",
+      "Namespace": "",
+      "BaseType": "UnityEngine.MonoBehaviour",
+      "Fields": [
+        {"Name": "x1", "Type": "System.Single", "IsPublic": false}
+      ],
+      "Methods": [
+        {"Name": "Cc", "ReturnType": "System.Void", "IsConstructor": true},
+        {"Name": "ql", "ReturnType": "System.Void", "Parameters": [{"Name": "v", "Type": "System.Single"}]},
+        {"Name": "qq", "ReturnType": "System.Void", "Parameters": []}
+      ]
+    },
+
+    {
+      "Name": "Dd",
+      "Namespace": "",
+      "BaseType": "UnityEngine.MonoBehaviour",
+      "Fields": [
+        {"Name": "z", "Type": "UnityEngine.AI.NavMeshAgent", "IsPublic": false},
+        {"Name": "zz", "Type": "UnityEngine.Transform", "IsPublic": false},
+        {"Name": "zzz", "Type": "System.Single", "IsPublic": false}
+      ],
+      "Methods": [
+        {"Name": "Dd", "ReturnType": "System.Void", "IsConstructor": true},
+        {"Name": "p", "ReturnType": "System.Void", "Parameters": []}
+      ]
+    },
+
+    {
+      "Name": "GoodLevelLoader",
+      "Namespace": "Game.Bootstrap",
+      "BaseType": "UnityEngine.MonoBehaviour",
+      "Fields": [
+        {"Name": "sceneName", "Type": "System.String", "IsPublic": true}
+      ],
+      "Methods": [
+        {"Name": "GoodLevelLoader", "ReturnType": "System.Void", "IsConstructor": true},
+        {"Name": "LoadScene", "ReturnType": "System.Void", "Parameters": [{"Name": "n", "Type": "System.String"}]}
+      ]
+    }
+  ]
+}

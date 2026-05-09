@@ -1,0 +1,6 @@
+# 主机架构调试用二进制 (release 用 dist/beautiful-dump-android-arm64, 已纳入版本控制)
+dist/beautiful-dump-host
+*.test
+*.out
+__pycache__/
+*.pyc
