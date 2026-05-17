@@ -2,142 +2,162 @@
 
 更优雅、更广泛、抗混淆的 U3D / IL2CPP dump 工具链。
 
-为 **ACE 比赛 / CTF 多版本逆向** 场景而设计 —— 每次构建函数名都被随机化（Beebyte、CodeStage 类混淆器），目标是从原始 dump 出发，**恢复一套跨版本稳定的可读 SDK**。
+为 **ACE 比赛 / CTF 多版本逆向** 场景而设计 —— 每次构建函数名都被随机化（Beebyte / CodeStage 类混淆器），目标是从原始 dump 出发，**恢复一套跨版本稳定的可读 SDK**。
 
-## 设计
-
-不重复造轮子，编排成熟开源工具，再补一层「跨版本签名匹配 + SDK 导出」：
+## 两块交付物
 
 ```
-                ┌──────────────────────────┐
-   Android      │  Zygisk-Il2CppDumper     │  ← 优选：开机自动 dump
-   (rooted)     │  └ or Frida memdump.js   │  ← 备选：运行时 dump
-                └────────────┬─────────────┘
-                             ▼
-                   libil2cpp.so (mem image)
-                   global-metadata.dat (decrypted)
-                             │
-                             ▼
-                ┌──────────────────────────┐
-                │  SoFixer / LIEF          │  → libil2cpp.fixed.so
-                └────────────┬─────────────┘
-                             ▼
-                ┌──────────────────────────┐
-                │  Il2CppDumper (Perfare)  │  → dump.cs / script.json / DummyDll
-                └────────────┬─────────────┘
-                             ▼
-                ┌──────────────────────────┐
-                │  bd.signature  (本项目)  │  → 与名字无关的特征向量
-                │  bd.matcher    (本项目)  │  → 跨版本名字恢复
-                │  bd.sdk_export (本项目)  │  → sdk.h / IDA / Frida
-                └──────────────────────────┘
+┌────────────────────────┐        ┌─────────────────────────────┐
+│  android/  (APK)       │  →     │  bd/  (host-side, Python)    │
+│  设备上一键 dump       │        │  跨版本签名匹配 + SDK 导出   │
+└────────────────────────┘        └─────────────────────────────┘
 ```
 
-依赖的开源项目（在 `setup.sh` 中自动拉取）：
-
-| 项目 | 用途 |
+| 用途 | 工具 |
 |---|---|
-| [Il2CppDumper](https://github.com/Perfare/Il2CppDumper) | metadata 解析、DummyDll 生成 |
-| [Zygisk-Il2CppDumper](https://github.com/Perfare/Zygisk-Il2CppDumper) | Zygisk 模块，自动 dump |
-| [SoFixer](https://github.com/F8LEFT/SoFixer) | 内存 dump → 可解析 ELF |
-| [Frida](https://frida.re) | 运行时注入 dumper |
-| [LIEF](https://lief.re) | Python ELF 重构后备 |
+| Android 上选目标应用 → 一键 dump | **APK**（MD3 Compose UI + root + native dumper） |
+| 主机上把 dump 变成可读 SDK | **Python CLI**（编排 Il2CppDumper / SoFixer，做匹配） |
 
-## 安装
+## APK（设备侧）
 
-```bash
-git clone <this-repo> && cd beautiful_dump
-./setup.sh              # 装 python deps + 拉 Il2CppDumper / SoFixer / Zygisk module
-# 还需要：
-#  - .NET 6 Runtime  (sudo apt install dotnet-runtime-6.0)
-#  - adb 能识别已 root 的 arm64 设备
-#  - 设备上 /data/local/tmp/frida-server 可执行（Frida 路径）
-#    或 设备已安装 Magisk + 已 flash Zygisk-Il2CppDumper（Zygisk 路径）
-```
+Material 3 应用，已 root 的 arm64 Android 设备运行。
 
-## 用法
+### 功能
 
-### 一键流（推荐）
+- 列出已安装应用（自动识别疑似 Unity 应用并打 `Unity` 标签）
+- ModalBottomSheet 选择框 + 实时搜索
+- 一键 dump：自动拉起目标 → 等 `libil2cpp.so` 加载 → root 内存 dump → 输出到 `/sdcard/beautiful_dump/<pkg>/`
+- 结果卡片显示 PID / 文件 / 大小 / metadata 地址
+- 点「打开文件管理器查看」自动跳转到系统文件管理器（多 intent 兜底：原生、Samsung MyFiles、MIUI Explorer、Files by Google、chooser）
+
+### 构建
 
 ```bash
-./beautiful_dump.py all -p com.example.unitygame --spawn
+cd android
+./gradlew :app:assembleRelease         # 需要 Android Studio Iguana+ 或 AGP 8.5+
+# 输出 app/build/outputs/apk/release/app-release.apk
+adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-输出在 `./out/com_example_unitygame/`：
+依赖：
+- Android SDK 34
+- NDK r26+ （`cmake` 通过 SDK Manager 安装）
+- 设备：arm64 + Magisk / KernelSU root
+
+第一次运行会向 Magisk 申请 root，授予即可。
+
+### 工作原理
 
 ```
-out/com_example_unitygame/
-├── libil2cpp.so           # 内存 dump
-├── libil2cpp.fixed.so     # ELF 修复后
-├── global-metadata.dat    # 解密后的 metadata
-├── dump_manifest.json     # 模块基址 / metadata 版本等
-├── il2cpp_out/            # Il2CppDumper 输出
-│   ├── dump.cs
-│   ├── script.json
-│   ├── stringliteral.json
-│   ├── DummyDll/
-│   └── il2cpp.h
-├── signatures.json        # 抗混淆特征向量
-└── sdk/                   # ★ 可读 SDK
-    ├── sdk.h              # C 头文件
-    ├── sdk_ida.py         # IDAPython 重命名脚本
-    └── sdk_frida.js       # Frida 运行时解析器
+APK Kotlin (libsu)
+       │
+       │ Shell.cmd("$nativeLibDir/libbd_dumper.so $pid $outdir")
+       ▼
+libbd_dumper.so   ← 内置 ARM64 ELF，编译时设了 -emain，运行时作为 binary exec
+       │
+       │ /proc/<pid>/mem
+       ▼
+libil2cpp.so + global-metadata.dat（解密后）
+       │
+       ▼
+/sdcard/beautiful_dump/<pkg>/
 ```
+
+把 native dumper 编成 `.so` 是为了让 Android 自动放进 `nativeLibraryDir` 并保留可执行位（Termux 同款套路），不走 `dlopen`，直接当 ELF 跑。
+
+### 自定义 magic
+
+如果游戏改了 metadata magic（`0xFAB11BAF`），在主界面的「自定义 metadata magic」框里填新值（如 `deadbeef`），再按 Dump。
+
+## Python 主机端
+
+用来把 APK 产的 dump 进一步处理成可读 SDK。
+
+### 一键流
+
+```bash
+./setup.sh                # 自动拉 Il2CppDumper / SoFixer / dnfile / lief
+# 把 APK dump 出来的目录 pull 到主机
+adb pull /sdcard/beautiful_dump/com_example_unitygame ./out/v1
+
+./beautiful_dump.py fix    out/v1/libil2cpp.so
+./beautiful_dump.py parse  out/v1/libil2cpp.fixed.so out/v1/global-metadata.dat
+./beautiful_dump.py sig    out/v1/libil2cpp.fixed.so out/v1/il2cpp_out
+./beautiful_dump.py sdk    out/v1/il2cpp_out/signatures.json -o out/v1/sdk
+```
+
+输出 `out/v1/sdk/` 含：
+
+- `sdk.h` —— C 头文件，含稳定名→RVA 的 `#define`
+- `sdk_ida.py` —— IDAPython，一键给 IDB 改名
+- `sdk_frida.js` —— Frida 运行时按稳定名解析地址
 
 ### 跨版本去混淆
 
-dump 两个版本，做名字映射：
-
 ```bash
-./beautiful_dump.py all -p com.example.unitygame -o out/v1
-./beautiful_dump.py all -p com.example.unitygame -o out/v2   # 装了新版本后
-./beautiful_dump.py match out/v1/signatures.json out/v2/signatures.json -o mapping.json
+./beautiful_dump.py sig out/v1/libil2cpp.fixed.so out/v1/il2cpp_out  # 已生成
+./beautiful_dump.py sig out/v2/libil2cpp.fixed.so out/v2/il2cpp_out
+./beautiful_dump.py match out/v1/il2cpp_out/signatures.json out/v2/il2cpp_out/signatures.json
 ```
 
-`mapping.json` 给出 v1 中已分析的可读名 → v2 中等价方法的地址，即使 v2 把所有方法名都重新随机化了一次。
+`matches.json` 即可读名映射 —— v1 的稳定名 → v2 中等价方法的地址，即使 v2 把所有名字重新随机化了。
 
-### 分步执行
+### 抗混淆锚点
 
-每一步都可以单独跑：
-
-```bash
-./beautiful_dump.py dump   -p com.example.unitygame --spawn
-./beautiful_dump.py fix    out/com_example_unitygame/libil2cpp.so
-./beautiful_dump.py parse  out/com_example_unitygame/libil2cpp.fixed.so out/com_example_unitygame/global-metadata.dat
-./beautiful_dump.py sig    out/com_example_unitygame/libil2cpp.fixed.so out/com_example_unitygame/il2cpp_out
-./beautiful_dump.py sdk    out/com_example_unitygame/signatures.json -o out/com_example_unitygame/sdk
-```
-
-## 抗混淆原理
-
-混淆器会重命名 class / method / field，但**有一些特征是它动不了的**，这些就是签名匹配的锚点：
+混淆器改不了的东西就是签名锚点：
 
 | 锚点 | 为什么稳定 |
 |---|---|
-| **字符串字面量** | "Login successful"、url、proto 名等大概率不变 |
-| **UnityEngine.* 调用** | 引擎类型 / 方法名是 SDK 公开 API，不能改 |
-| **返回类型 / 参数类型** | 类型签名不变（除非整体重构） |
-| **arm64 prologue hash** | 同样的逻辑 + 同 LLVM 版本，前若干条指令一致（call/branch 立即数已置零） |
-| **类的命名空间 + 继承结构** | `MonoBehaviour` 子类继承链稳定 |
+| 字符串字面量 | "Login successful"、url、proto 名等大概率不变 |
+| `UnityEngine.*` 调用 | 引擎 API 不能改 |
+| 返回 / 参数类型 | 类型签名稳定 |
+| arm64 prologue hash | 同 LLVM 版本相同逻辑前 32 字节一致（call/branch 立即数已置零） |
+| 命名空间 + 继承链 | `MonoBehaviour` 子类继承关系稳定 |
 
-`bd/signature.py` 提取这些特征，`bd/matcher.py` 用加权评分 + bucket 优化做匹配。每条匹配的 `reasons` 字段记录命中的锚点，便于人工 review。
+`bd/signature.py` 提取，`bd/matcher.py` 加权评分匹配，命中的锚点在 `reasons` 字段里。
 
-## 自定义 metadata magic
+## 项目结构
 
-部分游戏会改 `0xFAB11BAF` magic。如果 `dump` 时找不到 metadata：
-
-```bash
-# 自定义 magic，hex 小端字节序
-./beautiful_dump.py dump -p com.example.game --magic 'de ad be ef'
 ```
-
-如果连 magic 都被加密在 page 里 —— 内存 dump 之后用 `binwalk` 或人工搜索 metadata 表项的特征（如 string table）然后用 `--magic` 重 dump，或者直接 `--engine zygisk` 让 Zygisk 模块在 il2cpp 初始化完成后从内部指针取。
+beautiful_dump/
+├── android/                       APK 源码
+│   ├── app/
+│   │   ├── build.gradle.kts
+│   │   └── src/main/
+│   │       ├── AndroidManifest.xml
+│   │       ├── cpp/dumper.cpp     native dumper (arm64)
+│   │       ├── kotlin/com/beautifuldump/
+│   │       │   ├── MainActivity.kt
+│   │       │   ├── MainViewModel.kt
+│   │       │   ├── data/AppRepository.kt
+│   │       │   ├── dump/DumpRunner.kt
+│   │       │   ├── ui/Theme.kt
+│   │       │   └── util/FileManagerIntent.kt
+│   │       └── res/
+│   ├── build.gradle.kts
+│   └── settings.gradle.kts
+│
+├── bd/                            Python 分析后端
+│   ├── dump.py                    Frida 备选 dumper（主机端）
+│   ├── elf_fix.py                 SoFixer + LIEF 后备
+│   ├── il2cpp_dumper.py
+│   ├── signature.py               抗混淆特征向量
+│   ├── matcher.py                 跨版本匹配
+│   ├── sdk_export.py              SDK 输出
+│   └── zygisk_dump.py             Zygisk-Il2CppDumper 编排
+│
+├── frida_scripts/memdump.js       Frida 备选 dump 脚本
+├── beautiful_dump.py              Python CLI 入口
+├── setup.sh                       拉取 OSS 依赖
+└── requirements.txt
+```
 
 ## 已知限制
 
-- 仅支持 **arm64 ELF + IL2CPP 16~31 版本**（Unity 5.3 ~ 2023+）。
-- 对 il2cpp 之外的加固（VMP、混合 native code）无效 —— 那是另一个工具的事。
-- DummyDll 解析需要 `dnfile`，没装也能跑（精度降低）。
+- arm64 ELF + IL2CPP 16~31（Unity 5.3 ~ 2023+）。
+- APK 内的 dumper 不处理 `libil2cpp.so` 之外的 VMP / 混合 native 加固。
+- APK 假设 Magisk / KernelSU 提供的 `su` 在 PATH。
+- 设备首次安装后请确认 jniLibs 提取出来的 `libbd_dumper.so` 有执行位（部分 OEM 会清掉，DumpRunner 会 `chmod 0755` 兜底）。
 
 ## License
 

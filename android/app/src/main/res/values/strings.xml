@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Beautiful Dump</string>
+    <string name="select_app">选择应用</string>
+    <string name="search_apps">搜索应用</string>
+    <string name="dump_button">一键 Dump</string>
+    <string name="dumping">正在 dump…</string>
+    <string name="open_in_files">在文件管理器中打开</string>
+    <string name="no_app_selected">尚未选择应用</string>
+    <string name="likely_unity">Unity</string>
+    <string name="not_running">应用未运行 — 已尝试拉起</string>
+    <string name="need_root">需要 root 权限</string>
+</resources>

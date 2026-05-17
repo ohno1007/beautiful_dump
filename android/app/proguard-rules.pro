@@ -1,0 +1,3 @@
+-keep class com.beautifuldump.** { *; }
+-dontwarn org.bouncycastle.**
+-dontwarn org.conscrypt.**
