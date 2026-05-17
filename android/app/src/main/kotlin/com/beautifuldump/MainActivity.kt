@@ -359,8 +359,15 @@ private fun ResultCard(result: DumpResult) {
                     Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text(f.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                    Text(humanBytes(f.sizeBytes), style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        f.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (f.sizeBytes > 0) {
+                        Text(humanBytes(f.sizeBytes), style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             result.metadataAddr?.let {

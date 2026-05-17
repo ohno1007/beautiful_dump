@@ -159,18 +159,39 @@ class DumpRunner(private val context: Context) {
         val files = mutableListOf<DumpFile>()
         val errors = mutableListOf<String>()
         var metaAddr: String? = null
+        var detectedMagic: String? = null
 
         for (line in result.out) {
             emit(DumpEvent.Log(line))
             val obj = runCatching { JSONObject(line) }.getOrNull() ?: continue
             when (obj.optString("event")) {
-                "libil2cpp" -> files += DumpFile("libil2cpp.so", obj.getString("path"), obj.getLong("size"))
-                "libunity" -> files += DumpFile("libunity.so", obj.getString("path"), obj.getLong("size"))
+                "libil2cpp" -> files += DumpFile(
+                    "libil2cpp.so",
+                    obj.getString("path"), obj.getLong("size"),
+                )
+                "libunity" -> files += DumpFile(
+                    "libunity.so",
+                    obj.getString("path"), obj.getLong("size"),
+                )
+                "sdk" -> {
+                    val source = obj.optString("source", "?")
+                    val count = obj.optLong("count", 0)
+                    // sdk_strings_* files don't have a 'size' field, use line count
+                    files += DumpFile("sdk[$source] ($count names)",
+                        obj.getString("path"), 0L)
+                }
                 "metadata" -> {
-                    if (obj.has("error")) errors += obj.getString("error")
-                    else {
-                        files += DumpFile("global-metadata.dat", obj.getString("path"), obj.getLong("size"))
-                        metaAddr = if (obj.has("addr")) obj.getString("addr") else null
+                    if (obj.has("error")) {
+                        errors += obj.getString("error")
+                    } else {
+                        val idx = obj.optInt("idx", 0)
+                        val label = if (idx == 0) "global-metadata.dat"
+                                    else "global-metadata.candidate${idx}.dat"
+                        files += DumpFile(label, obj.getString("path"), obj.getLong("size"))
+                        if (idx == 0) {
+                            metaAddr = if (obj.has("addr")) obj.getString("addr") else null
+                            detectedMagic = if (obj.has("magic")) obj.getString("magic") else null
+                        }
                     }
                 }
             }
@@ -179,7 +200,7 @@ class DumpRunner(private val context: Context) {
         Shell.cmd("chmod -R 0644 $outDir/* 2>/dev/null || true").exec()
         Shell.cmd("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://$outDir").exec()
 
-        if (files.isEmpty()) {
+        if (files.none { it.label == "libil2cpp.so" }) {
             val hint = when (result.code) {
                 127 -> "shell 找不到 dumper - SELinux 阻止? 上下文: " +
                         Shell.cmd("ls -Z $dumper").exec().out.joinToString()
@@ -190,6 +211,10 @@ class DumpRunner(private val context: Context) {
             emit(DumpEvent.Failure(hint))
             return@flow
         }
-        emit(DumpEvent.Done(DumpResult(pkg, outDir, pid, files, metaAddr, errors)))
+        val noteParts = mutableListOf<String>()
+        if (detectedMagic != null && detectedMagic != "0xfab11baf")
+            noteParts += "检测到自定义 magic: $detectedMagic"
+        val metaSummary = if (metaAddr != null) "$metaAddr  ${noteParts.joinToString(" · ")}" else null
+        emit(DumpEvent.Done(DumpResult(pkg, outDir, pid, files, metaSummary, errors)))
     }.flowOn(Dispatchers.IO)
 }
