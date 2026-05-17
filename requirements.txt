@@ -1,0 +1,7 @@
+frida>=16.0.0
+frida-tools>=12.0.0
+lief>=0.14.0
+capstone>=5.0.0
+click>=8.0.0
+rich>=13.0.0
+dnfile>=0.15.0
