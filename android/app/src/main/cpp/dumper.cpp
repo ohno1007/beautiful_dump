@@ -3,15 +3,18 @@
 // executable via libsu rather than dlopen'ing it.
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <string>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -54,6 +57,20 @@ int open_mem(int pid) {
     char p[64];
     snprintf(p, sizeof(p), "/proc/%d/mem", pid);
     return open(p, O_RDONLY | O_LARGEFILE);
+}
+
+bool ptrace_attach(int pid) {
+    if (ptrace(PTRACE_ATTACH, pid, 0, 0) < 0) return false;
+    int status;
+    if (waitpid(pid, &status, 0) < 0) {
+        ptrace(PTRACE_DETACH, pid, 0, 0);
+        return false;
+    }
+    return true;
+}
+
+void ptrace_detach(int pid) {
+    ptrace(PTRACE_DETACH, pid, 0, 0);
 }
 
 ssize_t read_remote(int mem_fd, uintptr_t addr, void* buf, size_t n) {
@@ -137,15 +154,42 @@ int main(int argc, char** argv) {
     uint32_t magic = IL2CPP_META_MAGIC_LE;
     if (argc >= 4) magic = (uint32_t)strtoul(argv[3], nullptr, 16);
 
-    mkdir(out_dir, 0755);
+    // Print immediately so the harness can tell that we at least started.
+    printf("{\"event\":\"start\",\"pid\":%d,\"out\":\"%s\",\"magic\":\"0x%x\"}\n",
+           pid, out_dir, magic);
+    fflush(stdout);
 
+    if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
+        printf("{\"event\":\"fatal\",\"error\":\"mkdir %s failed: %s\"}\n",
+               out_dir, strerror(errno));
+        return 4;
+    }
+
+    bool attached = false;
     int mem_fd = open_mem(pid);
     if (mem_fd < 0) {
-        fprintf(stderr, "{\"error\":\"cannot open /proc/%d/mem (need root)\"}\n", pid);
-        return 2;
+        // YAMA may require ptrace_attach before allowing /proc/pid/mem.
+        printf("{\"event\":\"info\",\"msg\":\"open mem failed (%s), trying ptrace_attach\"}\n",
+               strerror(errno));
+        fflush(stdout);
+        if (ptrace_attach(pid)) {
+            attached = true;
+            mem_fd = open_mem(pid);
+        }
+        if (mem_fd < 0) {
+            printf("{\"event\":\"fatal\",\"error\":\"open /proc/%d/mem failed even after ptrace: %s\"}\n",
+                   pid, strerror(errno));
+            if (attached) ptrace_detach(pid);
+            return 2;
+        }
+        printf("{\"event\":\"info\",\"msg\":\"ptrace_attach ok\"}\n");
+        fflush(stdout);
     }
 
     auto maps = read_maps(pid);
+    printf("{\"event\":\"maps\",\"count\":%zu}\n", maps.size());
+    fflush(stdout);
+
     uintptr_t il_base = 0, il_end = 0;
     for (auto& r : maps) {
         if (r.path.find("libil2cpp.so") != std::string::npos) {
@@ -154,8 +198,9 @@ int main(int argc, char** argv) {
         }
     }
     if (il_base == 0) {
-        fprintf(stderr, "{\"error\":\"libil2cpp.so not mapped in pid %d\"}\n", pid);
+        printf("{\"event\":\"fatal\",\"error\":\"libil2cpp.so not mapped in pid %d\"}\n", pid);
         close(mem_fd);
+        if (attached) ptrace_detach(pid);
         return 3;
     }
 
@@ -204,5 +249,6 @@ int main(int argc, char** argv) {
     }
     printf("{\"event\":\"done\",\"out_dir\":\"%s\"}\n", out_dir);
     close(mem_fd);
+    if (attached) ptrace_detach(pid);
     return 0;
 }

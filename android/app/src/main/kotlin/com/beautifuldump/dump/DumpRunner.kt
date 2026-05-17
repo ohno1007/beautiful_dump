@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import org.json.JSONObject
 import java.io.File
+import java.util.zip.ZipFile
 
 data class DumpFile(val label: String, val path: String, val sizeBytes: Long)
 
@@ -33,27 +34,62 @@ class DumpRunner(private val context: Context) {
 
     companion object {
         const val DUMP_ROOT = "/sdcard/beautiful_dump"
-        // jniLibs/<abi>/libbd_dumper.so is extracted here at install time.
-        // On API 23+ the loader keeps it executable, so we exec it directly.
+        // We ship the dumper as libbd_dumper.so inside the APK.
         const val DUMPER_LIB = "libbd_dumper.so"
+        // Modern AGP keeps native libs zip-aligned inside the APK and never
+        // extracts them to disk - the nativeLibraryDir path is virtual and
+        // not directly exec'able. We unpack to a real path under
+        // /data/local/tmp at runtime so execve works regardless of OEM /
+        // SELinux quirks.
+        const val DUMPER_BIN = "/data/local/tmp/bd_dumper"
     }
 
-    private val dumperPath: String
-        get() = "${context.applicationInfo.nativeLibraryDir}/$DUMPER_LIB"
-
     init {
-        // Run *every* libsu command as root in a single shell session.
         Shell.enableVerboseLogging = false
-        Shell.setDefaultBuilder(Shell.Builder.create().setTimeout(30))
+        Shell.setDefaultBuilder(
+            Shell.Builder.create()
+                .setFlags(Shell.FLAG_REDIRECT_STDERR)   // merge stderr into stdout
+                .setTimeout(30)
+        )
     }
 
     fun ensureRoot(): Boolean = Shell.getShell().isRoot
+
+    /** Extract libbd_dumper.so from our own APK to a real disk path and
+     *  give it execute permissions via root. Returns the runnable path. */
+    private fun stageDumper(): String {
+        val apkPath = context.applicationInfo.sourceDir
+        val tmp = File(context.cacheDir, "bd_dumper").apply { parentFile?.mkdirs() }
+        // Always re-extract on app upgrade; the file is tiny.
+        val pkgVer = context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+        val marker = File(context.cacheDir, "bd_dumper.v")
+        val current = marker.takeIf { it.exists() }?.readText()?.trim()
+        if (!tmp.exists() || current != pkgVer.toString()) {
+            ZipFile(apkPath).use { zf ->
+                val entry = zf.getEntry("lib/arm64-v8a/$DUMPER_LIB")
+                    ?: error("$DUMPER_LIB missing from APK")
+                zf.getInputStream(entry).use { ins ->
+                    tmp.outputStream().use { out -> ins.copyTo(out) }
+                }
+            }
+            marker.writeText(pkgVer.toString())
+        }
+        // cacheDir is mounted noexec, so move via root to /data/local/tmp/.
+        val cp = Shell.cmd(
+            "cp -f ${tmp.absolutePath} $DUMPER_BIN",
+            "chmod 0755 $DUMPER_BIN",
+            "chcon u:object_r:shell_data_file:s0 $DUMPER_BIN 2>/dev/null || true",
+        ).exec()
+        if (!cp.isSuccess) {
+            error("failed to stage dumper: exit=${cp.code} out=${cp.out.joinToString("\\n")}")
+        }
+        return DUMPER_BIN
+    }
 
     /** Returns PID of [pkg] or 0. Uses `pidof` if available, otherwise /proc walk. */
     fun pidOf(pkg: String): Int {
         val out = Shell.cmd("pidof $pkg").exec().out.firstOrNull()?.trim().orEmpty()
         if (out.isNotEmpty()) return out.split(" ").first().toIntOrNull() ?: 0
-        // pidof might not exist on stock images; fall back to a /proc scan
         val fallback = Shell.cmd(
             "for p in /proc/[0-9]*; do " +
                 "cmd=\$(cat \$p/cmdline 2>/dev/null | tr -d '\\0'); " +
@@ -64,10 +100,6 @@ class DumpRunner(private val context: Context) {
 
     fun launch(pkg: String) {
         Shell.cmd("monkey -p $pkg -c android.intent.category.LAUNCHER 1").exec()
-    }
-
-    fun forceStop(pkg: String) {
-        Shell.cmd("am force-stop $pkg").exec()
     }
 
     /** Wait up to [timeoutMs] for the target to load libil2cpp.so. Returns PID or 0. */
@@ -89,6 +121,14 @@ class DumpRunner(private val context: Context) {
             emit(DumpEvent.Failure("未授予 root 权限")); return@flow
         }
 
+        emit(DumpEvent.Progress("准备 dumper…"))
+        val dumper = try {
+            stageDumper()
+        } catch (e: Throwable) {
+            emit(DumpEvent.Failure("stage dumper 失败: ${e.message}")); return@flow
+        }
+        emit(DumpEvent.Log("dumper -> $dumper"))
+
         emit(DumpEvent.Progress("解析 PID…"))
         var pid = pidOf(pkg)
         if (pid == 0) {
@@ -102,21 +142,27 @@ class DumpRunner(private val context: Context) {
             }
         } else {
             emit(DumpEvent.Log("发现 PID=$pid"))
+            // Verify libil2cpp.so is actually mapped before invoking the dumper.
+            val maps = Shell.cmd("grep -c libil2cpp.so /proc/$pid/maps || true").exec()
+            val hits = maps.out.firstOrNull()?.trim()?.toIntOrNull() ?: 0
+            emit(DumpEvent.Log("libil2cpp.so segments in /proc/$pid/maps: $hits"))
+            if (hits == 0) {
+                emit(DumpEvent.Failure("PID $pid 的 maps 里没有 libil2cpp.so —— 加固/壳延迟解密?"))
+                return@flow
+            }
         }
 
         val outDir = "$DUMP_ROOT/${pkg.replace('.', '_')}"
         Shell.cmd("mkdir -p $outDir && chmod 0755 $outDir").exec()
 
-        // Make sure the dumper is executable. On some OEMs the loader
-        // clears the exec bit when extracting jniLibs - force it back.
-        Shell.cmd("chmod 0755 $dumperPath").exec()
-
         val magicArg = magic?.let { " ${it.replace(" ", "")}" }.orEmpty()
         emit(DumpEvent.Progress("内存 dump 中…"))
-        val cmd = "$dumperPath $pid $outDir$magicArg"
+        val cmd = "$dumper $pid $outDir$magicArg"
         emit(DumpEvent.Log("$ $cmd"))
 
         val result = Shell.cmd(cmd).exec()
+        emit(DumpEvent.Log("[exit ${result.code}]"))
+
         val files = mutableListOf<DumpFile>()
         val errors = mutableListOf<String>()
         var metaAddr: String? = null
@@ -136,17 +182,19 @@ class DumpRunner(private val context: Context) {
                 }
             }
         }
-        for (line in result.err) {
-            emit(DumpEvent.Log("[err] $line"))
-            errors += line
-        }
 
-        Shell.cmd("chmod -R 0644 $outDir/*").exec()
-        // Trigger MediaScanner so the files show up in third-party file managers.
+        Shell.cmd("chmod -R 0644 $outDir/* 2>/dev/null || true").exec()
         Shell.cmd("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://$outDir").exec()
 
         if (files.isEmpty()) {
-            emit(DumpEvent.Failure(errors.lastOrNull() ?: "dumper 未产生任何文件"))
+            val hint = when (result.code) {
+                127 -> "shell 找不到 dumper - SELinux 阻止? 上下文: " +
+                        Shell.cmd("ls -Z $dumper").exec().out.joinToString()
+                126 -> "权限拒绝 - 可能 noexec mount 或 SELinux denial"
+                139 -> "dumper 段错误 - 可能是 /proc/$pid/mem 读取被拒"
+                else -> errors.lastOrNull() ?: "dumper 未产生任何文件 (exit ${result.code})"
+            }
+            emit(DumpEvent.Failure(hint))
             return@flow
         }
         emit(DumpEvent.Done(DumpResult(pkg, outDir, pid, files, metaAddr, errors)))
