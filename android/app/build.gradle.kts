@@ -11,8 +11,8 @@ android {
         applicationId = "com.beautifuldump"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 6
+        versionName = "0.1.5"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -27,8 +27,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // R8 keeps silently stripping things that Compose / libsu need at
+            // runtime, even with keep rules.  For a CTF tool the 15 MB APK
+            // size doesn't matter; correctness does.
+            isMinifyEnabled = false
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName("debug")
         }
     }
