@@ -50,7 +50,8 @@ class ZygiskHelper(private val context: Context) {
         return dest
     }
 
-    /** Flash the module via Magisk. Requires a device reboot to take effect. */
+    /** Flash the module via whatever root manager the device has.
+     *  Supports Magisk, KernelSU (ksud), and APatch (apd). */
     fun install(): InstallResult {
         if (!Shell.getShell().isRoot) return InstallResult(false, "需要 root")
         val zip = try { extractZip() } catch (e: Throwable) {
@@ -61,14 +62,44 @@ class ZygiskHelper(private val context: Context) {
             "cp ${zip.absolutePath} $remoteZip",
             "chmod 0644 $remoteZip",
         ).exec()
-        val r = Shell.cmd("magisk --install-module $remoteZip").exec()
-        val log = (r.out + r.err).joinToString("\n")
-        val ok = r.isSuccess && log.contains("Done", ignoreCase = true) ||
-                isInstalled()
+
+        // Detect which root manager is in use and call the matching CLI.
+        // We probe via `which` since Magisk's binary path varies by version.
+        val has = mutableMapOf<String, Boolean>()
+        for (bin in listOf("magisk", "ksud", "apd")) {
+            has[bin] = Shell.cmd("which $bin 2>/dev/null").exec().out.any { it.isNotBlank() }
+        }
+
+        val cmds = listOfNotNull(
+            if (has["magisk"] == true) "magisk --install-module $remoteZip" else null,
+            if (has["ksud"] == true) "ksud module install $remoteZip" else null,
+            if (has["apd"] == true) "apd module install $remoteZip" else null,
+        )
+
+        if (cmds.isEmpty()) {
+            return InstallResult(
+                success = false,
+                message = "未检测到 magisk / ksud / apd。\n" +
+                          "请打开你的 root 管理器 (KernelSU Manager 等), " +
+                          "选「从存储安装模块」，文件路径:\n$remoteZip",
+            )
+        }
+
+        val log = StringBuilder()
+        var ok = false
+        for (cmd in cmds) {
+            val r = Shell.cmd(cmd).exec()
+            log.append("$ $cmd\n")
+            (r.out + r.err).forEach { log.append(it).append('\n') }
+            log.append("[exit ${r.code}]\n")
+            if (r.isSuccess) { ok = true; break }
+        }
+        if (!ok) ok = isInstalled()
+
         return InstallResult(
             success = ok,
             message = if (ok) "模块已安装，**请重启设备后再 Dump**" else "安装失败:\n$log",
-            log = log,
+            log = log.toString(),
         )
     }
 
