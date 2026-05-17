@@ -1,0 +1,14 @@
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/.idea/
+android/.kotlin/
+*.apk
+!beautiful_dump-release.apk
+__pycache__/
+*.pyc
+out/
+third_party/
+.venv/

@@ -131,7 +131,7 @@ class DumpRunner(private val context: Context) {
                     if (obj.has("error")) errors += obj.getString("error")
                     else {
                         files += DumpFile("global-metadata.dat", obj.getString("path"), obj.getLong("size"))
-                        metaAddr = obj.optString("addr", null)
+                        metaAddr = if (obj.has("addr")) obj.getString("addr") else null
                     }
                 }
             }
