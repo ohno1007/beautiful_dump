@@ -119,11 +119,11 @@ Cluster find_first_cluster(const std::vector<MemRange>& maps, const char* name) 
         }
         if (c.start == 0) {
             c.start = r.start; c.end = r.end; c.segments = 1;
-        } else if (r.start <= c.end + 0x10000) {  // contiguous (≤64 KiB gap)
-            c.end = std::max(c.end, r.end);
+        } else if (r.start == c.end) {       // strict adjacency only
+            c.end = r.end;
             c.segments++;
         } else {
-            return c;                    // big VA gap, treat as separate module
+            return c;                         // any gap = different mapping, stop
         }
     }
     return c;
@@ -141,28 +141,75 @@ struct HeaderProbe {
 
 HeaderProbe probe_header(const uint8_t* hdr, size_t hdr_size) {
     HeaderProbe p;
-    if (hdr_size < 256) return p;
+    if (hdr_size < 0x400) return p;
     uint32_t version;
     memcpy(&version, hdr + 4, 4);
-    if (version < 16 || version > 35) return p;
-    uint32_t max_end = 256;
+    // Modern Unity range only.  Older versions almost never appear in
+    // shipping games anymore and widening this is the main source of
+    // structural false positives.
+    if (version < 24 || version > 31) return p;
+
+    uint32_t max_end = 0;
+    uint32_t prev_end = 0;
+    uint32_t first_off = 0;
     int valid_pairs = 0;
-    for (size_t i = 8; i + 8 <= std::min(hdr_size, size_t(0x400)); i += 8) {
+    for (size_t i = 8; i + 8 <= 0x400; i += 8) {
         uint32_t off, sz;
         memcpy(&off, hdr + i, 4);
         memcpy(&sz, hdr + i + 4, 4);
         if (off == 0 && sz == 0) continue;
-        if (off > 0x40000000 || sz > 0x40000000) return p;
-        if (off + sz > max_end) max_end = off + sz;
+        // Real IL2CPP tables: offsets are 4-byte aligned, monotonic,
+        // first table starts past the header (≥0x100, ≤0x400),
+        // sizes are reasonable.
+        if (off & 0x3) return p;
+        if (off < 0x100 || off > META_MAX) return p;
+        if (sz == 0 || sz > META_MAX) return p;
+        if (off < prev_end) return p;
+        if (!first_off) first_off = off;
+        prev_end = off + sz;
+        if (prev_end > max_end) max_end = prev_end;
         valid_pairs++;
     }
-    if (valid_pairs < 15) return p;
+    // Real headers have 30+ tables for v24+, first table within typical
+    // header size, total payload in a sane range (1 MiB - 128 MiB).
+    if (valid_pairs < 30) return p;
+    if (first_off > 0x400) return p;
+    if (max_end < (1u << 20) || max_end > (128u << 20)) return p;
+
     memcpy(&p.magic, hdr, 4);
     p.version = version;
     p.total_size = (max_end + 0xFFF) & ~0xFFFULL;
-    if (p.total_size > META_MAX) return p;
     p.valid = true;
     return p;
+}
+
+// Sample a candidate buffer and look for canonical IL2CPP/.NET strings.
+// If we can't find any of these, the buffer is almost certainly not
+// real metadata (encrypted stringblob notwithstanding) - reject it
+// rather than dump 100 MiB of unrelated memory.
+bool verify_metadata_strings(int mem_fd, uintptr_t base, size_t total_size) {
+    static constexpr const char* markers[] = {
+        "System.Object", "mscorlib", "UnityEngine", "Il2Cpp",
+        "System.String", "<Module>",
+    };
+    constexpr size_t SAMPLE = 0x80000;   // 512 KiB per chunk
+    std::vector<uint8_t> buf(SAMPLE);
+    int hits = 0;
+    int chunks = 6;
+    for (int i = 0; i < chunks; i++) {
+        size_t off = (total_size / chunks) * i;
+        size_t to_read = std::min(SAMPLE, total_size - off);
+        ssize_t got = read_remote(mem_fd, base + off, buf.data(), to_read);
+        if (got <= 0) continue;
+        for (auto m : markers) {
+            size_t mlen = strlen(m);
+            for (ssize_t j = 0; j + (ssize_t)mlen <= got; j++) {
+                if (memcmp(buf.data() + j, m, mlen) == 0) { hits++; break; }
+            }
+            if (hits >= 2) return true;
+        }
+    }
+    return hits >= 2;
 }
 
 struct MetaCandidate {
@@ -376,17 +423,29 @@ int main(int argc, char** argv) {
         cands = scan_metadata(mem_fd, maps, 0);
     }
 
-    if (cands.empty()) {
-        printf("{\"event\":\"metadata\",\"error\":\"no metadata candidate found\"}\n");
+    // Verify each candidate by looking for IL2CPP marker strings.
+    // Reject structurally-plausible-but-clearly-not-metadata buffers
+    // (Android resource pools, JIT scratch, etc.) before they hit disk.
+    std::vector<MetaCandidate> verified;
+    for (auto& c : cands) {
+        if (verify_metadata_strings(mem_fd, c.addr, c.size)) verified.push_back(c);
+    }
+    printf("{\"event\":\"info\",\"msg\":\"%zu of %zu candidates passed string verification\"}\n",
+           verified.size(), cands.size());
+    fflush(stdout);
+
+    if (verified.empty()) {
+        printf("{\"event\":\"metadata\",\"error\":\"no IL2CPP metadata found in memory - "
+               "either the protection encrypts the stringblob, or metadata never gets "
+               "fully decrypted into a single buffer\"}\n");
     } else {
-        // Dedupe candidates that are clearly the same buffer mapped at
-        // different VAs (shared mmap, double-load). Key on (version, size,
-        // first 256 bytes after the header).
-        std::sort(cands.begin(), cands.end(),
+        // Dedupe by (version, size, first 256 bytes after header) - same
+        // buffer mapped twice via shared mmap.
+        std::sort(verified.begin(), verified.end(),
                   [](const auto& a, const auto& b) { return a.size > b.size; });
         std::vector<MetaCandidate> unique;
         std::vector<std::vector<uint8_t>> seen_blobs;
-        for (auto& c : cands) {
+        for (auto& c : verified) {
             std::vector<uint8_t> probe(256);
             if (read_remote(mem_fd, c.addr + 256, probe.data(), 256) != 256) continue;
             bool dup = false;
@@ -397,10 +456,9 @@ int main(int argc, char** argv) {
                 }
             }
             if (!dup) { unique.push_back(c); seen_blobs.push_back(std::move(probe)); }
-            if (unique.size() >= 3) break;
+            if (unique.size() >= 2) break;
         }
-        printf("{\"event\":\"info\",\"msg\":\"%zu unique metadata candidate(s) of %zu\"}\n",
-               unique.size(), cands.size());
+        printf("{\"event\":\"info\",\"msg\":\"%zu unique verified metadata\"}\n", unique.size());
         fflush(stdout);
         for (size_t i = 0; i < unique.size(); ++i)
             dump_metadata_candidate(mem_fd, unique[i], out_dir, (int)i);
