@@ -26,6 +26,9 @@ data class UiState(
     val result: DumpResult? = null,
     val error: String? = null,
     val customMagic: String = "",
+    val zygiskInstalled: Boolean = false,
+    val zygiskBusy: Boolean = false,
+    val zygiskMessage: String? = null,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -40,12 +43,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { repo.listLaunchable() }
-            }.onSuccess { list ->
-                _state.update { it.copy(installedApps = list) }
-            }.onFailure { e ->
-                android.util.Log.e("bd", "listLaunchable failed", e)
-                _state.update { it.copy(error = "枚举应用失败: ${e.message}") }
-            }
+            }.onSuccess { list -> _state.update { it.copy(installedApps = list) } }
+                .onFailure { e ->
+                    android.util.Log.e("bd", "listLaunchable failed", e)
+                    _state.update { it.copy(error = "枚举应用失败: ${e.message}") }
+                }
+        }
+        refreshZygiskStatus()
+    }
+
+    fun refreshZygiskStatus() {
+        viewModelScope.launch {
+            val installed = withContext(Dispatchers.IO) { runner.zygisk.isInstalled() }
+            _state.update { it.copy(zygiskInstalled = installed) }
         }
     }
 
@@ -53,15 +63,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun closePicker() = _state.update { it.copy(pickerOpen = false) }
 
     fun selectApp(info: AppInfo) = _state.update {
-        it.copy(selected = info, pickerOpen = false, result = null, error = null, log = emptyList())
+        it.copy(selected = info, pickerOpen = false, result = null,
+                error = null, log = emptyList())
     }
 
     fun setMagic(s: String) = _state.update { it.copy(customMagic = s) }
 
+    fun installZygisk() {
+        if (_state.value.zygiskBusy) return
+        _state.update { it.copy(zygiskBusy = true, zygiskMessage = null) }
+        viewModelScope.launch {
+            val r = withContext(Dispatchers.IO) { runner.zygisk.install() }
+            _state.update {
+                it.copy(
+                    zygiskBusy = false,
+                    zygiskMessage = r.message,
+                    zygiskInstalled = r.success || it.zygiskInstalled,
+                )
+            }
+        }
+    }
+
     fun runDump() {
         val target = _state.value.selected ?: return
         if (_state.value.running) return
-        _state.update { it.copy(running = true, progress = "准备…", log = emptyList(), error = null, result = null) }
+        _state.update { it.copy(running = true, progress = "准备…",
+                                log = emptyList(), error = null, result = null) }
         viewModelScope.launch {
             val magic = _state.value.customMagic.trim().ifBlank { null }
             runner.run(target.packageName, magic).collect { ev ->

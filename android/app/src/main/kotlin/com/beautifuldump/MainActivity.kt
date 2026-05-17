@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
                             onSelect = vm::selectApp,
                             onDump = vm::runDump,
                             onMagicChange = vm::setMagic,
+                            onInstallZygisk = vm::installZygisk,
                         )
                     }
                 }
@@ -85,6 +86,7 @@ fun HomeScreen(
     onSelect: (AppInfo) -> Unit,
     onDump: () -> Unit,
     onMagicChange: (String) -> Unit,
+    onInstallZygisk: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -106,6 +108,13 @@ fun HomeScreen(
             AppSelectorCard(
                 selected = state.selected,
                 onClick = onPickerOpen,
+            )
+
+            ZygiskCard(
+                installed = state.zygiskInstalled,
+                busy = state.zygiskBusy,
+                message = state.zygiskMessage,
+                onInstall = onInstallZygisk,
             )
 
             MagicField(state.customMagic, onMagicChange)
@@ -192,6 +201,76 @@ private fun AppSelectorCard(selected: AppInfo?, onClick: () -> Unit) {
                 )
             }
             Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+        }
+    }
+}
+
+@Composable
+private fun ZygiskCard(
+    installed: Boolean,
+    busy: Boolean,
+    message: String?,
+    onInstall: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (installed) MaterialTheme.colorScheme.secondaryContainer
+                             else MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (installed) Icons.Default.CheckCircle else Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = if (installed) MaterialTheme.colorScheme.onSecondaryContainer
+                           else MaterialTheme.colorScheme.tertiary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (installed) "Zygisk-Il2CppDumper 已就绪"
+                    else "Zygisk-Il2CppDumper 未安装（强保护游戏必需）",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            if (!installed) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "对香肠派对这种带 anti-debug 的游戏，被动 dump 无效。" +
+                    "点下面按钮安装 Zygisk 模块 → 重启设备 → 再 Dump，就能拿到完整 dump.cs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                FilledTonalButton(
+                    onClick = onInstall,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("安装中…")
+                    } else {
+                        Icon(Icons.Default.Download, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("安装 Zygisk 模块")
+                    }
+                }
+            }
+            if (!message.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
         }
     }
 }
