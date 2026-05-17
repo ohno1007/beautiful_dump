@@ -200,6 +200,10 @@ std::vector<MetaCandidate> scan_metadata(int mem_fd, const std::vector<MemRange>
                     r.start + off + i, p.magic, p.version, p.total_size,
                     r.path.empty() ? "[anon]" : r.path,
                 });
+                // Skip past this candidate so we don't re-detect the same
+                // buffer at offset+4, +8, … inside its own body.
+                ssize_t skip = (ssize_t)std::min(p.total_size, (size_t)(got - i)) - 4;
+                if (skip > 0) i += skip;
                 if (out.size() >= 8) return out;
             }
         }
@@ -215,10 +219,24 @@ void dump_metadata_candidate(int mem_fd, const MetaCandidate& c,
     else
         snprintf(outp, sizeof(outp), "%s/global-metadata.candidate%d.dat", out_dir.c_str(), idx);
     size_t got = dump_range(mem_fd, c.addr, c.addr + c.size, outp);
+
+    // If the protection stripped the magic (or rolled a custom one), patch
+    // 0xFAB11BAF back so Il2CppDumper on the host accepts the file.
+    bool patched = false;
+    if (c.magic != IL2CPP_META_MAGIC_LE && got > 4) {
+        int fd = open(outp, O_RDWR);
+        if (fd >= 0) {
+            uint32_t fixed = IL2CPP_META_MAGIC_LE;
+            patched = pwrite64(fd, &fixed, 4, 0) == 4;
+            close(fd);
+        }
+    }
+
     printf("{\"event\":\"metadata\",\"idx\":%d,\"addr\":\"0x%lx\","
            "\"magic\":\"0x%08x\",\"version\":%u,\"size\":%zu,\"path\":\"%s\","
-           "\"region\":\"%s\"}\n",
-           idx, c.addr, c.magic, c.version, got, outp, c.source_range.c_str());
+           "\"region\":\"%s\",\"magic_patched\":%s}\n",
+           idx, c.addr, c.magic, c.version, got, outp,
+           c.source_range.c_str(), patched ? "true" : "false");
     fflush(stdout);
 }
 
@@ -361,13 +379,32 @@ int main(int argc, char** argv) {
     if (cands.empty()) {
         printf("{\"event\":\"metadata\",\"error\":\"no metadata candidate found\"}\n");
     } else {
-        printf("{\"event\":\"info\",\"msg\":\"%zu metadata candidate(s)\"}\n", cands.size());
-        fflush(stdout);
-        // Dump best (largest) first, then up to 2 more as alternates.
+        // Dedupe candidates that are clearly the same buffer mapped at
+        // different VAs (shared mmap, double-load). Key on (version, size,
+        // first 256 bytes after the header).
         std::sort(cands.begin(), cands.end(),
                   [](const auto& a, const auto& b) { return a.size > b.size; });
-        for (size_t i = 0; i < cands.size() && i < 3; ++i)
-            dump_metadata_candidate(mem_fd, cands[i], out_dir, (int)i);
+        std::vector<MetaCandidate> unique;
+        std::vector<std::vector<uint8_t>> seen_blobs;
+        for (auto& c : cands) {
+            std::vector<uint8_t> probe(256);
+            if (read_remote(mem_fd, c.addr + 256, probe.data(), 256) != 256) continue;
+            bool dup = false;
+            for (size_t k = 0; k < seen_blobs.size(); k++) {
+                if (unique[k].version == c.version && unique[k].size == c.size &&
+                    memcmp(seen_blobs[k].data(), probe.data(), 256) == 0) {
+                    dup = true; break;
+                }
+            }
+            if (!dup) { unique.push_back(c); seen_blobs.push_back(std::move(probe)); }
+            if (unique.size() >= 3) break;
+        }
+        printf("{\"event\":\"info\",\"msg\":\"%zu unique metadata candidate(s) of %zu\"}\n",
+               unique.size(), cands.size());
+        fflush(stdout);
+        for (size_t i = 0; i < unique.size(); ++i)
+            dump_metadata_candidate(mem_fd, unique[i], out_dir, (int)i);
+        cands = std::move(unique);
     }
 
     snprintf(outp, sizeof(outp), "%s/maps.txt", out_dir);
