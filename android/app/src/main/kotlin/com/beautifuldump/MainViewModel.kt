@@ -38,8 +38,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            val list = withContext(Dispatchers.IO) { repo.listLaunchable() }
-            _state.update { it.copy(installedApps = list) }
+            runCatching {
+                withContext(Dispatchers.IO) { repo.listLaunchable() }
+            }.onSuccess { list ->
+                _state.update { it.copy(installedApps = list) }
+            }.onFailure { e ->
+                android.util.Log.e("bd", "listLaunchable failed", e)
+                _state.update { it.copy(error = "枚举应用失败: ${e.message}") }
+            }
         }
     }
 

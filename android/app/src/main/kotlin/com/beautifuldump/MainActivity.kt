@@ -41,23 +41,37 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            BeautifulDumpTheme {
-                val state by vm.state.collectAsStateWithLifecycle()
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
-                ) {
-                    HomeScreen(
-                        state = state,
-                        onPickerOpen = vm::openPicker,
-                        onPickerClose = vm::closePicker,
-                        onSelect = vm::selectApp,
-                        onDump = vm::runDump,
-                        onMagicChange = vm::setMagic,
-                    )
+        try {
+            setContent {
+                BeautifulDumpTheme {
+                    val state by vm.state.collectAsStateWithLifecycle()
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        HomeScreen(
+                            state = state,
+                            onPickerOpen = vm::openPicker,
+                            onPickerClose = vm::closePicker,
+                            onSelect = vm::selectApp,
+                            onDump = vm::runDump,
+                            onMagicChange = vm::setMagic,
+                        )
+                    }
                 }
             }
+        } catch (t: Throwable) {
+            android.util.Log.e("bd", "setContent failed", t)
+            // Fallback to a plain TextView so the app at least opens.
+            val tv = android.widget.TextView(this).apply {
+                text = buildString {
+                    append("Compose 启动失败:\n\n")
+                    append(t.stackTraceToString())
+                }
+                setPadding(40, 80, 40, 40)
+                textSize = 12f
+            }
+            setContentView(android.widget.ScrollView(this).apply { addView(tv) })
         }
     }
 }
