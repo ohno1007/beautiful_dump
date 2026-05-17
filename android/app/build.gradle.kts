@@ -11,8 +11,8 @@ android {
         applicationId = "com.beautifuldump"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -75,9 +75,8 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.0.1")
 
     // libsu - root shell  (https://github.com/topjohnwu/libsu)
-    val libsuVer = "5.2.2"
-    implementation("com.github.topjohnwu.libsu:core:$libsuVer")
-    implementation("com.github.topjohnwu.libsu:service:$libsuVer")
+    // :service intentionally NOT pulled in; we only use Shell.cmd.
+    implementation("com.github.topjohnwu.libsu:core:5.2.2")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

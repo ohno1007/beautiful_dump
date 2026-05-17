@@ -44,15 +44,8 @@ class DumpRunner(private val context: Context) {
         const val DUMPER_BIN = "/data/local/tmp/bd_dumper"
     }
 
-    init {
-        Shell.enableVerboseLogging = false
-        Shell.setDefaultBuilder(
-            Shell.Builder.create()
-                .setFlags(Shell.FLAG_REDIRECT_STDERR)   // merge stderr into stdout
-                .setTimeout(30)
-        )
-    }
-
+    // Shell configuration lives in BdApplication.onCreate so we don't risk
+    // hitting "shell already created" IllegalStateException here.
     fun ensureRoot(): Boolean = Shell.getShell().isRoot
 
     /** Extract libbd_dumper.so from our own APK to a real disk path and
